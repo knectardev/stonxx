@@ -1,1 +1,5 @@
-Test file
+
+Paper Account: PA3PZDRT1PBO
+https://paper-api.alpaca.markets/v2
+Key: PKTBNSMVFHOUYP6OLHJZMOCYFX
+Secret: AMUye4BuS4vbaGmXfNRCdf9cpsWuo17sJkcYUa5GjDb6
