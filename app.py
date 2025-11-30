@@ -3,7 +3,7 @@ import requests
 import yaml
 from typing import List, Dict
 import time
-from database import get_bars, get_latest_bar, get_data_range, get_symbols_with_data
+from database import get_bars, get_latest_bar, get_data_range, get_symbols_with_data, get_connection
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
@@ -126,15 +126,34 @@ def get_stocks():
         if not db_symbols:
             return jsonify({'stocks': [], 'message': 'No symbols in database. Please add historical data first.'})
         
-        # Get latest prices from database (use latest bar's close price)
+        # Fetch latest prices and min/max timestamps per symbol efficiently
         stocks = []
+
+        # Single query to get min/max and count per symbol
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT symbol, MIN(timestamp) AS min_ts, MAX(timestamp) AS max_ts, COUNT(*) AS bar_count
+            FROM bars
+            WHERE timeframe = '1Min'
+            GROUP BY symbol
+        """)
+        ranges = {row[0]: (row[1], row[2], row[3]) for row in cur.fetchall()}
+
+        # Latest prices
         for symbol in db_symbols:
             latest_bar = get_latest_bar(symbol, '1Min')
-            if latest_bar:
-                stocks.append({
-                    'symbol': symbol,
-                    'price': latest_bar['close']
-                })
+            if not latest_bar:
+                continue
+            min_ts, max_ts, count = ranges.get(symbol, (None, None, 0))
+            stocks.append({
+                'symbol': symbol,
+                'price': latest_bar['close'],
+                'range_start_ts': int(min_ts) if min_ts is not None else None,
+                'range_end_ts': int(max_ts) if max_ts is not None else None,
+                'bar_count': int(count) if count is not None else 0
+            })
+        conn.close()
         
         print(f"Returning {len(stocks)} stocks from database")
         return jsonify({'stocks': stocks})
@@ -218,6 +237,16 @@ def get_symbol_bars(symbol):
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+@app.route('/symbol/<symbol>')
+def symbol_detail(symbol):
+    """Render full-page detail view for a symbol"""
+    try:
+        return render_template('symbol.html', symbol=symbol)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return f"Error loading symbol page: {str(e)}", 500
 
 if __name__ == '__main__':
     try:

@@ -85,6 +85,30 @@
             margin-left: auto;
         }
 
+        .search-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-left: 10px;
+            flex: 1 1 260px;
+            max-width: 360px;
+        }
+
+        .search-input {
+            background-color: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            color: #e0e0e0;
+            padding: 8px 12px;
+            width: 100%;
+            font-size: 14px;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+
         .matches-label {
             color: #b0b0b0;
             font-size: 12px;
@@ -368,6 +392,9 @@
                     <span class="to-label">to</span>
                     <input type="number" id="maxPrice" class="price-input" value="20" step="1" min="0">
                 </div>
+                <div class="search-container">
+                    <input id="symbolSearch" class="search-input" type="text" placeholder="Search ticker..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                </div>
                 <div class="matches-section">
                     <span class="matches-label">Matches:</span>
                     <span class="matches-count" id="matchCount">0</span>
@@ -385,6 +412,7 @@
                     <div class="slider-handle" id="maxHandle"></div>
                 </div>
             </div>
+
         </div>
 
         <div id="errorMessage" class="error" style="display: none;"></div>
@@ -395,11 +423,13 @@
                     <tr>
                         <th class="sortable" data-column="symbol">Symbol</th>
                         <th class="sortable" data-column="price">Price</th>
+                        <th class="sortable" data-column="bar_count">1m Records</th>
+                        <th>Data Range</th>
                     </tr>
                 </thead>
                 <tbody id="stockTableBody">
                     <tr>
-                        <td colspan="2" class="loading">Loading stocks...</td>
+                        <td colspan="4" class="loading">Loading stocks...</td>
                     </tr>
                 </tbody>
             </table>
@@ -425,6 +455,8 @@
         let maxPrice = 20;
         let priceRange = { min: 0, max: 1000 };
         let sortState = { column: 'price', direction: 'asc' }; // 'asc' or 'desc'
+        let globalRange = { start: null, end: null }; // unix seconds across all rows
+        let searchQuery = '';
 
         // Initialize
         async function init() {
@@ -436,7 +468,7 @@
         async function loadStocks() {
             try {
                 const tbody = document.getElementById('stockTableBody');
-                tbody.innerHTML = '<tr><td colspan="2" class="loading">Loading stocks from Alpaca API...</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" class="loading">Loading stocks from Alpaca API...</td></tr>';
                 
                 const response = await fetch('/api/stocks');
                 if (!response.ok) {
@@ -445,16 +477,27 @@
                 const data = await response.json();
                 if (data.error) {
                     showError(data.error);
-                    tbody.innerHTML = '<tr><td colspan="2" class="loading">Error: ' + data.error + '</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="4" class="loading">Error: ' + data.error + '</td></tr>';
                     return;
                 }
                 allStocks = data.stocks || [];
                 if (allStocks.length === 0) {
                     showError('No stocks found. Please check your Alpaca API credentials and network connection.');
-                    tbody.innerHTML = '<tr><td colspan="2" class="loading">No stocks found. Check console for details.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="4" class="loading">No stocks found. Check console for details.</td></tr>';
                     return;
                 }
                 
+                // Compute global date range for visualization
+                const starts = allStocks.map(s => s.range_start_ts).filter(Boolean);
+                const ends = allStocks.map(s => s.range_end_ts).filter(Boolean);
+                if (starts.length && ends.length) {
+                    globalRange.start = Math.min(...starts);
+                    globalRange.end = Math.max(...ends);
+                } else {
+                    globalRange.start = null;
+                    globalRange.end = null;
+                }
+
                 // Filter out stocks with 0 price for range calculation
                 const stocksWithPrice = allStocks.filter(s => s.price > 0);
                 if (stocksWithPrice.length === 0) {
@@ -497,6 +540,14 @@
                 updateSlider();
             });
 
+            // Search input
+            const searchInput = document.getElementById('symbolSearch');
+            searchInput.addEventListener('input', (e) => {
+                const value = (e.target.value || '').trim();
+                searchQuery = value.toLowerCase();
+                updateFilter();
+            });
+
             // Column header sorting
             document.querySelectorAll('th.sortable').forEach(header => {
                 header.addEventListener('click', () => {
@@ -527,6 +578,8 @@
                 updateFilter();
             });
         }
+
+        // no datalist suggestions; we purely filter table by text
 
         function setupSliderHandle(handleId, callback) {
             const handle = document.getElementById(handleId);
@@ -630,9 +683,12 @@
         }
 
         function updateFilter() {
-            const filtered = allStocks.filter(stock => 
-                stock.price >= minPrice && stock.price <= maxPrice
-            );
+            const filtered = allStocks.filter(stock => {
+                const inPrice = stock.price >= minPrice && stock.price <= maxPrice;
+                if (!inPrice) return false;
+                if (!searchQuery) return true;
+                return stock.symbol.toLowerCase().includes(searchQuery);
+            });
 
             // Sort based on current sort state
             filtered.sort((a, b) => {
@@ -641,6 +697,8 @@
                     comparison = a.symbol.localeCompare(b.symbol);
                 } else if (sortState.column === 'price') {
                     comparison = a.price - b.price;
+                } else if (sortState.column === 'bar_count') {
+                    comparison = (a.bar_count || 0) - (b.bar_count || 0);
                 }
                 return sortState.direction === 'asc' ? comparison : -comparison;
             });
@@ -652,27 +710,34 @@
             tbody.innerHTML = '';
 
             if (filtered.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="2" class="loading">No stocks found in this price range</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" class="loading">No stocks found in this price range</td></tr>';
                 return;
             }
 
             filtered.forEach(stock => {
                 const row = document.createElement('tr');
+                const hasRange = !!(stock.range_start_ts && stock.range_end_ts && globalRange.start && globalRange.end);
+                let rangeCell = '<div style="color:#777">—</div>';
+                if (hasRange && globalRange.end > globalRange.start) {
+                    const leftPct = ((stock.range_start_ts - globalRange.start) / (globalRange.end - globalRange.start)) * 100;
+                    const widthPct = ((stock.range_end_ts - stock.range_start_ts) / (globalRange.end - globalRange.start)) * 100;
+                    rangeCell = `
+                        <div class="mini-range" title="${new Date(stock.range_start_ts*1000).toLocaleDateString()} — ${new Date(stock.range_end_ts*1000).toLocaleDateString()}">
+                            <div class="mini-track"></div>
+                            <div class="mini-fill" style="left:${Math.max(0, Math.min(100, leftPct))}%;width:${Math.max(1, Math.min(100, widthPct))}%"></div>
+                        </div>
+                    `;
+                }
                 row.innerHTML = `
-                    <td><a href="#" class="symbol-link" data-symbol="${stock.symbol}">${stock.symbol}</a></td>
+                    <td><a href="/symbol/${stock.symbol}" class="symbol-link">${stock.symbol}</a></td>
                     <td class="price-cell">${stock.price.toFixed(3)}</td>
+                    <td>${(stock.bar_count || 0).toLocaleString()}</td>
+                    <td>${rangeCell}</td>
                 `;
                 tbody.appendChild(row);
             });
 
-            // Add click handlers to symbol links
-            document.querySelectorAll('.symbol-link').forEach(link => {
-                link.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    const symbol = e.target.dataset.symbol;
-                    showBarModal(symbol);
-                });
-            });
+            // Links now navigate to dedicated detail pages
 
             updateDistribution();
             updateSlider();
@@ -788,6 +853,32 @@
             });
         });
     </script>
+
+    <style>
+        .mini-range {
+            position: relative;
+            height: 10px;
+            width: 160px;
+        }
+        .mini-track {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: #2a2a2a;
+            transform: translateY(-50%);
+            border-radius: 2px;
+        }
+        .mini-fill {
+            position: absolute;
+            top: 50%;
+            height: 4px;
+            background: #4a9eff;
+            transform: translateY(-50%);
+            border-radius: 2px;
+        }
+    </style>
 </body>
 </html>
 
