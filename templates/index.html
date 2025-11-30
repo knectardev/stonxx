@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NYSE Stock Filter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #ffffff;
+            margin-bottom: 30px;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .filter-section {
+            background-color: #1a1a1a;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .filter-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .filter-label {
+            color: #b0b0b0;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .price-inputs {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .price-input {
+            background-color: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            color: #e0e0e0;
+            padding: 8px 12px;
+            width: 80px;
+            font-size: 14px;
+        }
+
+        .price-input:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+
+        .to-label {
+            color: #b0b0b0;
+            font-size: 14px;
+        }
+
+        .matches-section {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            margin-left: auto;
+        }
+
+        .matches-label {
+            color: #b0b0b0;
+            font-size: 12px;
+        }
+
+        .matches-count {
+            color: #4a9eff;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .distribution-container {
+            position: relative;
+            height: 120px;
+            margin-top: 20px;
+        }
+
+        .distribution-graph {
+            position: relative;
+            width: 100%;
+            height: 80px;
+            margin-bottom: 10px;
+        }
+
+        .distribution-bars {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 100%;
+            display: flex;
+            align-items: flex-end;
+            gap: 1px;
+        }
+
+        .bar {
+            flex: 1;
+            background-color: #1e3a5f;
+            min-height: 2px;
+            transition: background-color 0.2s;
+        }
+
+        .bar.active {
+            background-color: #4a9eff;
+        }
+
+        .slider-container {
+            position: relative;
+            height: 20px;
+            margin-top: 10px;
+        }
+
+        .slider-track {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background-color: #1e3a5f;
+            transform: translateY(-50%);
+            border-radius: 2px;
+        }
+
+        .slider-range {
+            position: absolute;
+            top: 50%;
+            height: 4px;
+            background-color: #4a9eff;
+            transform: translateY(-50%);
+            border-radius: 2px;
+            pointer-events: none;
+        }
+
+        .slider-handle {
+            position: absolute;
+            top: 50%;
+            width: 16px;
+            height: 16px;
+            background-color: #4a9eff;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            cursor: grab;
+            z-index: 10;
+        }
+
+        .slider-handle:active {
+            cursor: grabbing;
+        }
+
+        .table-container {
+            background-color: #1a1a1a;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead {
+            background-color: #2a2a2a;
+        }
+
+        th {
+            padding: 12px 16px;
+            text-align: left;
+            color: #b0b0b0;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            user-select: none;
+        }
+
+        th.sortable {
+            cursor: pointer;
+            position: relative;
+            padding-right: 24px;
+        }
+
+        th.sortable:hover {
+            color: #ffffff;
+        }
+
+        th.sortable::after {
+            content: '';
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            opacity: 0.3;
+        }
+
+        th.sortable.sort-asc::after {
+            border-bottom: 6px solid #4a9eff;
+            opacity: 1;
+        }
+
+        th.sortable.sort-desc::after {
+            border-top: 6px solid #4a9eff;
+            opacity: 1;
+        }
+
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #2a2a2a;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+
+        tbody tr:hover {
+            background-color: #252525;
+        }
+
+        .price-cell {
+            color: #4ecdc4;
+            font-weight: 500;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #b0b0b0;
+        }
+
+        .error {
+            background-color: #3a1a1a;
+            color: #ff6b6b;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .symbol-link {
+            color: #4a9eff;
+            cursor: pointer;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .symbol-link:hover {
+            color: #6bb6ff;
+            text-decoration: underline;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            overflow: auto;
+        }
+
+        .modal-content {
+            background-color: #1a1a1a;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 1200px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid #2a2a2a;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            color: #ffffff;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .close {
+            color: #b0b0b0;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .close:hover {
+            color: #ffffff;
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .bars-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .bars-table th {
+            position: sticky;
+            top: 0;
+            background-color: #2a2a2a;
+            z-index: 10;
+        }
+
+        .modal-loading {
+            text-align: center;
+            padding: 40px;
+            color: #b0b0b0;
+        }
+
+        .modal-info {
+            color: #b0b0b0;
+            font-size: 12px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Stock Filter</h1>
+
+        <div class="filter-section">
+            <div class="filter-header">
+                <span class="filter-label">Last Price</span>
+                <div class="price-inputs">
+                    <input type="number" id="minPrice" class="price-input" value="1" step="1" min="0">
+                    <span class="to-label">to</span>
+                    <input type="number" id="maxPrice" class="price-input" value="20" step="1" min="0">
+                </div>
+                <div class="matches-section">
+                    <span class="matches-label">Matches:</span>
+                    <span class="matches-count" id="matchCount">0</span>
+                </div>
+            </div>
+
+            <div class="distribution-container">
+                <div class="distribution-graph" id="distributionGraph">
+                    <div class="distribution-bars" id="distributionBars"></div>
+                </div>
+                <div class="slider-container">
+                    <div class="slider-track" id="sliderTrack"></div>
+                    <div class="slider-range" id="sliderRange"></div>
+                    <div class="slider-handle" id="minHandle"></div>
+                    <div class="slider-handle" id="maxHandle"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="errorMessage" class="error" style="display: none;"></div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="sortable" data-column="symbol">Symbol</th>
+                        <th class="sortable" data-column="price">Price</th>
+                    </tr>
+                </thead>
+                <tbody id="stockTableBody">
+                    <tr>
+                        <td colspan="2" class="loading">Loading stocks...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Modal for displaying bar data -->
+    <div id="barModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="modalTitle">Stock Details</div>
+                <span class="close" id="closeModal">&times;</span>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <div class="modal-loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allStocks = [];
+        let minPrice = 1;
+        let maxPrice = 20;
+        let priceRange = { min: 0, max: 1000 };
+        let sortState = { column: 'price', direction: 'asc' }; // 'asc' or 'desc'
+
+        // Initialize
+        async function init() {
+            await loadStocks();
+            setupEventListeners();
+            updateFilter();
+        }
+
+        async function loadStocks() {
+            try {
+                const tbody = document.getElementById('stockTableBody');
+                tbody.innerHTML = '<tr><td colspan="2" class="loading">Loading stocks from Alpaca API...</td></tr>';
+                
+                const response = await fetch('/api/stocks');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                if (data.error) {
+                    showError(data.error);
+                    tbody.innerHTML = '<tr><td colspan="2" class="loading">Error: ' + data.error + '</td></tr>';
+                    return;
+                }
+                allStocks = data.stocks || [];
+                if (allStocks.length === 0) {
+                    showError('No stocks found. Please check your Alpaca API credentials and network connection.');
+                    tbody.innerHTML = '<tr><td colspan="2" class="loading">No stocks found. Check console for details.</td></tr>';
+                    return;
+                }
+                
+                // Filter out stocks with 0 price for range calculation
+                const stocksWithPrice = allStocks.filter(s => s.price > 0);
+                if (stocksWithPrice.length === 0) {
+                    showError('Stocks found but no prices available. This may indicate an API authentication issue.');
+                    priceRange.min = 0;
+                    priceRange.max = 100;
+                } else {
+                    priceRange.min = Math.min(...stocksWithPrice.map(s => s.price));
+                    priceRange.max = Math.max(...stocksWithPrice.map(s => s.price));
+                }
+                // Set defaults to 1-20, but adjust if price range is smaller
+                minPrice = Math.max(priceRange.min, Math.min(1, priceRange.min));
+                maxPrice = Math.min(priceRange.max, Math.max(20, priceRange.max));
+                document.getElementById('minPrice').value = Math.round(minPrice);
+                document.getElementById('maxPrice').value = Math.round(maxPrice);
+                minPrice = Math.round(minPrice);
+                maxPrice = Math.round(maxPrice);
+                updateDistribution();
+                updateFilter();
+            } catch (error) {
+                console.error('Error loading stocks:', error);
+                showError('Failed to load stocks: ' + error.message);
+                const tbody = document.getElementById('stockTableBody');
+                tbody.innerHTML = '<tr><td colspan="2" class="loading">Error: ' + error.message + '</td></tr>';
+            }
+        }
+
+        function setupEventListeners() {
+            document.getElementById('minPrice').addEventListener('input', (e) => {
+                minPrice = Math.max(priceRange.min, Math.min(parseInt(e.target.value) || priceRange.min, maxPrice));
+                e.target.value = minPrice;
+                updateFilter();
+                updateSlider();
+            });
+
+            document.getElementById('maxPrice').addEventListener('input', (e) => {
+                maxPrice = Math.min(priceRange.max, Math.max(parseInt(e.target.value) || priceRange.max, minPrice));
+                e.target.value = maxPrice;
+                updateFilter();
+                updateSlider();
+            });
+
+            // Column header sorting
+            document.querySelectorAll('th.sortable').forEach(header => {
+                header.addEventListener('click', () => {
+                    const column = header.dataset.column;
+                    if (sortState.column === column) {
+                        // Toggle direction if same column
+                        sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        // New column, start with ascending
+                        sortState.column = column;
+                        sortState.direction = 'asc';
+                    }
+                    updateSortIndicators();
+                    updateFilter();
+                });
+            });
+
+            // Slider handles
+            setupSliderHandle('minHandle', (value) => {
+                minPrice = Math.round(value);
+                document.getElementById('minPrice').value = minPrice;
+                updateFilter();
+            });
+
+            setupSliderHandle('maxHandle', (value) => {
+                maxPrice = Math.round(value);
+                document.getElementById('maxPrice').value = maxPrice;
+                updateFilter();
+            });
+        }
+
+        function setupSliderHandle(handleId, callback) {
+            const handle = document.getElementById(handleId);
+            const track = document.getElementById('sliderTrack');
+            let isDragging = false;
+            const isMinHandle = handleId === 'minHandle';
+
+            handle.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const rect = track.getBoundingClientRect();
+                const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                let value = priceRange.min + x * (priceRange.max - priceRange.min);
+                
+                // Constrain handles from crossing
+                if (isMinHandle) {
+                    value = Math.min(value, maxPrice);
+                } else {
+                    value = Math.max(value, minPrice);
+                }
+                
+                callback(value);
+                updateSlider();
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+        }
+
+        function updateSlider() {
+            const track = document.getElementById('sliderTrack');
+            const range = document.getElementById('sliderRange');
+            const minHandle = document.getElementById('minHandle');
+            const maxHandle = document.getElementById('maxHandle');
+
+            const minPercent = ((minPrice - priceRange.min) / (priceRange.max - priceRange.min)) * 100;
+            const maxPercent = ((maxPrice - priceRange.min) / (priceRange.max - priceRange.min)) * 100;
+
+            minHandle.style.left = minPercent + '%';
+            maxHandle.style.left = maxPercent + '%';
+            range.style.left = minPercent + '%';
+            range.style.width = (maxPercent - minPercent) + '%';
+        }
+
+        function updateDistribution() {
+            const bars = document.getElementById('distributionBars');
+            bars.innerHTML = '';
+
+            if (allStocks.length === 0) {
+                // Show empty state
+                return;
+            }
+
+            if (priceRange.max <= priceRange.min) {
+                priceRange.max = priceRange.min + 1;
+            }
+
+            const numBins = 50;
+            const binSize = (priceRange.max - priceRange.min) / numBins;
+            const bins = new Array(numBins).fill(0);
+
+            allStocks.forEach(stock => {
+                const binIndex = Math.min(
+                    Math.max(0, Math.floor((stock.price - priceRange.min) / binSize)),
+                    numBins - 1
+                );
+                bins[binIndex]++;
+            });
+
+            const maxCount = Math.max(...bins);
+            if (maxCount === 0) return;
+
+            bins.forEach((count, index) => {
+                const bar = document.createElement('div');
+                bar.className = 'bar';
+                const height = (count / maxCount) * 100;
+                bar.style.height = height + '%';
+                
+                const binMin = priceRange.min + index * binSize;
+                const binMax = priceRange.min + (index + 1) * binSize;
+                if (binMin < maxPrice && binMax > minPrice) {
+                    bar.classList.add('active');
+                }
+                
+                bars.appendChild(bar);
+            });
+        }
+
+        function updateSortIndicators() {
+            document.querySelectorAll('th.sortable').forEach(header => {
+                header.classList.remove('sort-asc', 'sort-desc');
+                if (header.dataset.column === sortState.column) {
+                    header.classList.add(`sort-${sortState.direction}`);
+                }
+            });
+        }
+
+        function updateFilter() {
+            const filtered = allStocks.filter(stock => 
+                stock.price >= minPrice && stock.price <= maxPrice
+            );
+
+            // Sort based on current sort state
+            filtered.sort((a, b) => {
+                let comparison = 0;
+                if (sortState.column === 'symbol') {
+                    comparison = a.symbol.localeCompare(b.symbol);
+                } else if (sortState.column === 'price') {
+                    comparison = a.price - b.price;
+                }
+                return sortState.direction === 'asc' ? comparison : -comparison;
+            });
+
+            document.getElementById('matchCount').textContent = 
+                filtered.length.toLocaleString();
+
+            const tbody = document.getElementById('stockTableBody');
+            tbody.innerHTML = '';
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" class="loading">No stocks found in this price range</td></tr>';
+                return;
+            }
+
+            filtered.forEach(stock => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><a href="#" class="symbol-link" data-symbol="${stock.symbol}">${stock.symbol}</a></td>
+                    <td class="price-cell">${stock.price.toFixed(3)}</td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            // Add click handlers to symbol links
+            document.querySelectorAll('.symbol-link').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const symbol = e.target.dataset.symbol;
+                    showBarModal(symbol);
+                });
+            });
+
+            updateDistribution();
+            updateSlider();
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        // Modal functions
+        function showBarModal(symbol) {
+            const modal = document.getElementById('barModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            modal.style.display = 'block';
+            modalTitle.textContent = `${symbol} - Historical Price Data (1-Minute Bars)`;
+            modalBody.innerHTML = '<div class="modal-loading">Loading historical data...</div>';
+            
+            // Fetch bar data (no limit to get all data)
+            fetch(`/api/bars/${symbol}?timeframe=1Min`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        modalBody.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                        return;
+                    }
+                    
+                    displayBars(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching bars:', error);
+                    modalBody.innerHTML = `<div class="error">Failed to load data: ${error.message}</div>`;
+                });
+        }
+
+        function displayBars(data) {
+            const modalBody = document.getElementById('modalBody');
+            
+            if (!data.bars || data.bars.length === 0) {
+                modalBody.innerHTML = '<div class="modal-loading">No historical data available for this symbol.</div>';
+                return;
+            }
+            
+            let html = '';
+            
+            // Info section
+            if (data.date_range) {
+                const startDate = new Date(data.date_range.start);
+                const endDate = new Date(data.date_range.end);
+                const days = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24));
+                html += `<div class="modal-info">`;
+                html += `Data range: ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()} (${days} days)<br>`;
+                html += `Total bars: ${data.count.toLocaleString()} (showing all)`;
+                html += `</div>`;
+            }
+            
+            // Table
+            html += '<table class="bars-table">';
+            html += '<thead><tr>';
+            html += '<th>Date/Time</th>';
+            html += '<th>Open</th>';
+            html += '<th>High</th>';
+            html += '<th>Low</th>';
+            html += '<th>Close</th>';
+            html += '<th>Volume</th>';
+            html += '</tr></thead>';
+            html += '<tbody>';
+            
+            data.bars.forEach(bar => {
+                const dt = new Date(bar.datetime);
+                html += '<tr>';
+                html += `<td>${dt.toLocaleString()}</td>`;
+                html += `<td class="price-cell">${bar.open.toFixed(2)}</td>`;
+                html += `<td class="price-cell">${bar.high.toFixed(2)}</td>`;
+                html += `<td class="price-cell">${bar.low.toFixed(2)}</td>`;
+                html += `<td class="price-cell">${bar.close.toFixed(2)}</td>`;
+                html += `<td>${bar.volume.toLocaleString()}</td>`;
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table>';
+            modalBody.innerHTML = html;
+        }
+
+        function closeModal() {
+            document.getElementById('barModal').style.display = 'none';
+        }
+
+        // Modal event listeners
+        window.addEventListener('DOMContentLoaded', () => {
+            // Close modal when clicking X
+            document.getElementById('closeModal').addEventListener('click', closeModal);
+            
+            // Close modal when clicking outside
+            window.addEventListener('click', (e) => {
+                const modal = document.getElementById('barModal');
+                if (e.target === modal) {
+                    closeModal();
+                }
+            });
+        });
+
+        // Initialize on load
+        window.addEventListener('DOMContentLoaded', () => {
+            console.log('Page loaded, initializing...');
+            updateSortIndicators(); // Initialize sort indicators
+            init().catch(error => {
+                console.error('Initialization error:', error);
+                showError('Failed to initialize: ' + error.message);
+            });
+        });
+    </script>
+</body>
+</html>
+
