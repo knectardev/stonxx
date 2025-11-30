@@ -1,1 +1,40 @@
+# Configuration files with sensitive data
 config.yml
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Generated files and images
+*.png
+*.jpg
+*.jpeg
+bar_count_histogram.png
+
+# Test files with sensitive data
+test.txt
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
