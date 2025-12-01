@@ -53,6 +53,15 @@ def init_database():
         ON bars(symbol)
     ''')
 
+    # Ratings table - stores a single 0-5 star rating per symbol
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS symbol_ratings (
+            symbol TEXT PRIMARY KEY,
+            rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        )
+    ''')
+
     # Ingest runs table - tracks background/on-demand ingest processes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ingest_runs (
@@ -355,6 +364,42 @@ def has_running_ingest(timeframe: Optional[str] = None, mode: Optional[str] = No
     cnt = cur.fetchone()[0]
     conn.close()
     return cnt > 0
+
+def get_symbol_rating(symbol: str) -> int:
+    """Return the 0-5 rating for a symbol (0 if unrated)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT rating FROM symbol_ratings WHERE symbol = ?', (symbol,))
+    row = cur.fetchone()
+    conn.close()
+    return int(row[0]) if row else 0
+
+def set_symbol_rating(symbol: str, rating: int) -> int:
+    """
+    Upsert and return the sanitized rating (0-5) for the symbol.
+    """
+    r = max(0, min(5, int(rating)))
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        INSERT INTO symbol_ratings(symbol, rating, updated_at)
+        VALUES (?, ?, strftime('%s','now'))
+        ON CONFLICT(symbol) DO UPDATE SET
+            rating = excluded.rating,
+            updated_at = excluded.updated_at
+    ''', (symbol, r))
+    conn.commit()
+    conn.close()
+    return r
+
+def get_ratings_map() -> Dict[str, int]:
+    """Return a dict of symbol -> rating for all rated symbols."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT symbol, rating FROM symbol_ratings')
+    out: Dict[str, int] = {row[0]: int(row[1]) for row in cur.fetchall()}
+    conn.close()
+    return out
 
 if __name__ == '__main__':
     # Initialize database when run directly
