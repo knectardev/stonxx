@@ -442,6 +442,7 @@
                     <tr>
                         <th class="sortable" data-column="symbol">Symbol</th>
                         <th class="sortable" data-column="price">Price</th>
+                        <th>Rating</th>
                         <th class="sortable" data-column="bar_count">1m Records</th>
                         <th class="sortable" data-column="bar_count_5m">5m Records</th>
                         <th class="sortable" data-column="bar_count_30m">30m Records</th>
@@ -450,7 +451,7 @@
                 </thead>
                 <tbody id="stockTableBody">
                     <tr>
-                        <td colspan="6" class="loading">Loading stocks...</td>
+                        <td colspan="7" class="loading">Loading stocks...</td>
                     </tr>
                 </tbody>
             </table>
@@ -488,10 +489,59 @@
             startStatusPolling();
         }
 
+        function renderStarsHTML(rating) {
+            const r = Math.max(0, Math.min(5, Number(rating) || 0));
+            let html = '';
+            for (let i = 1; i <= 5; i++) {
+                const cls = i <= r ? 'star filled' : 'star';
+                html += `<span class="${cls}" data-value="${i}">★</span>`;
+            }
+            return html;
+        }
+
+        function attachStarHandlers(container) {
+            if (!container) return;
+            const symbol = container.dataset.symbol;
+            const getSaved = () => Number(container.dataset.rating || 0);
+            const setVisual = (val) => {
+                container.querySelectorAll('.star').forEach((el) => {
+                    const v = Number(el.dataset.value);
+                    el.classList.toggle('filled', v <= val);
+                });
+            };
+            container.addEventListener('mousemove', (e) => {
+                const target = e.target.closest('.star');
+                if (!target) return;
+                const val = Number(target.dataset.value || 0);
+                setVisual(val);
+            });
+            container.addEventListener('mouseleave', () => setVisual(getSaved()));
+            container.addEventListener('click', async (e) => {
+                const target = e.target.closest('.star');
+                if (!target) return;
+                const val = Number(target.dataset.value || 0);
+                try {
+                    const res = await fetch(`/api/rating/${encodeURIComponent(symbol)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rating: val })
+                    });
+                    const js = await res.json();
+                    if (res.ok && !js.error) {
+                        container.dataset.rating = String(js.rating || 0);
+                        setVisual(js.rating || 0);
+                        // Update in-memory list so re-render reflects change
+                        const idx = allStocks.findIndex(s => s.symbol === symbol);
+                        if (idx >= 0) allStocks[idx].rating = js.rating || 0;
+                    }
+                } catch {}
+            });
+        }
+
         async function loadStocks() {
             try {
                 const tbody = document.getElementById('stockTableBody');
-                tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading stocks from Alpaca API...</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading stocks from Alpaca API...</td></tr>';
                 
                 const response = await fetch('/api/stocks');
                 if (!response.ok) {
@@ -500,13 +550,13 @@
                 const data = await response.json();
                 if (data.error) {
                     showError(data.error);
-                    tbody.innerHTML = '<tr><td colspan="6" class="loading">Error: ' + data.error + '</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="loading">Error: ' + data.error + '</td></tr>';
                     return;
                 }
                 allStocks = data.stocks || [];
                 if (allStocks.length === 0) {
                     showError('No stocks found. Please check your Alpaca API credentials and network connection.');
-                    tbody.innerHTML = '<tr><td colspan="6" class="loading">No stocks found. Check console for details.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="loading">No stocks found. Check console for details.</td></tr>';
                     return;
                 }
                 
@@ -744,7 +794,7 @@
             tbody.innerHTML = '';
 
             if (filtered.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="loading">No stocks found in this price range</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" class="loading">No stocks found in this price range</td></tr>';
                 return;
             }
 
@@ -765,12 +815,14 @@
                 row.innerHTML = `
                     <td><a href="/symbol/${stock.symbol}" class="symbol-link">${stock.symbol}</a></td>
                     <td class="price-cell">${stock.price.toFixed(3)}</td>
+                    <td><div class="stars" data-symbol="${stock.symbol}" data-rating="${stock.rating || 0}">${renderStarsHTML(stock.rating || 0)}</div></td>
                     <td>${(stock.bar_count || 0).toLocaleString()}</td>
                     <td>${(stock.bar_count_5m || 0).toLocaleString()}</td>
                     <td>${(stock.bar_count_30m || 0).toLocaleString()}</td>
                     <td>${rangeCell}</td>
                 `;
                 tbody.appendChild(row);
+                attachStarHandlers(row.querySelector('.stars'));
             });
 
             // Links now navigate to dedicated detail pages
@@ -991,6 +1043,9 @@
             padding: 6px 10px;
             border-radius: 6px;
         }
+        .stars { display: inline-flex; gap: 2px; cursor: pointer; user-select: none; }
+        .star { color: #555; font-size: 16px; line-height: 1; }
+        .star.filled { color: #f5b301; }
         .mini-track {
             position: absolute;
             top: 50%;

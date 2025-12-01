@@ -68,6 +68,10 @@
             border-color: #426e9e;
             color: #9ed0ff;
         }
+        /* Rating stars */
+        .stars { display: inline-flex; gap: 2px; cursor: pointer; user-select: none; }
+        .star { color: #555; font-size: 18px; line-height: 1; }
+        .star.filled { color: #f5b301; }
         /* Bottom overlay range controls */
         .range-controls {
             position: absolute;
@@ -136,6 +140,7 @@
             <div class="card-header">
                 <div class="summary" id="summaryText">Loading...</div>
                 <div style="display:flex;align-items:center;gap:10px;">
+                    <div id="ratingBox" class="stars" title="Your rating"></div>
                     <div class="tf-toggle">
                         <button id="btn1m" class="active" data-tf="1Min">1 minute</button>
                         <button id="btn5m" data-tf="5Min">5 minute</button>
@@ -157,6 +162,59 @@
         let currentChart = null;
         let currentFirst = null;
         let currentLast = null;
+
+        function renderStars(container, rating) {
+            container.dataset.rating = String(rating || 0);
+            container.innerHTML = '';
+            for (let i = 1; i <= 5; i++) {
+                const span = document.createElement('span');
+                span.textContent = '★';
+                span.className = 'star' + (i <= (rating || 0) ? ' filled' : '');
+                span.dataset.value = String(i);
+                container.appendChild(span);
+            }
+            const getSaved = () => Number(container.dataset.rating || 0);
+            const setVisual = (val) => {
+                container.querySelectorAll('.star').forEach((el) => {
+                    el.classList.toggle('filled', Number(el.dataset.value) <= val);
+                });
+            };
+            container.addEventListener('mousemove', (e) => {
+                const t = e.target.closest('.star');
+                if (!t) return;
+                setVisual(Number(t.dataset.value || 0));
+            });
+            container.addEventListener('mouseleave', () => setVisual(getSaved()));
+            container.addEventListener('click', async (e) => {
+                const t = e.target.closest('.star');
+                if (!t) return;
+                const val = Number(t.dataset.value || 0);
+                try {
+                    const res = await fetch(`/api/rating/${encodeURIComponent(SYMBOL)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rating: val })
+                    });
+                    const js = await res.json();
+                    if (res.ok && !js.error) {
+                        container.dataset.rating = String(js.rating || 0);
+                        setVisual(js.rating || 0);
+                    }
+                } catch {}
+            });
+        }
+
+        async function initRating() {
+            const box = document.getElementById('ratingBox');
+            try {
+                const res = await fetch(`/api/rating/${encodeURIComponent(SYMBOL)}`);
+                const js = await res.json();
+                const r = res.ok && !js.error ? (js.rating || 0) : 0;
+                renderStars(box, r);
+            } catch {
+                renderStars(box, 0);
+            }
+        }
 
         function renderPriceChart(data) {
             const container = document.getElementById('detailBody');
@@ -249,6 +307,35 @@
             });
             volumeSeries.setData(volumes);
 
+            // Keep volume pane about 100px high from the bottom edge
+            function applyVolumeHeightPx() {
+                const desiredPx = 100; // target height in pixels
+                const h = chartRoot.clientHeight || 1;
+                // portion of pane to give to volume area; clamp to sane bounds
+                const portion = Math.max(0.10, Math.min(0.50, desiredPx / h));
+                volumeSeries.priceScale().applyOptions({
+                    scaleMargins: { top: 1 - portion, bottom: 0 }
+                });
+            }
+            applyVolumeHeightPx();
+
+            // Ensure tallest visible volume reaches the top of the volume pane
+            volumeSeries.autoscaleInfoProvider = () => {
+                const range = chart.timeScale().getVisibleRange();
+                if (!range) return null;
+                let maxV = 0;
+                for (const p of volumes) {
+                    if (p == null || p.value == null) continue;
+                    const t = Number(p.time);
+                    if (t >= range.from && t <= range.to) {
+                        if (p.value > maxV) maxV = p.value;
+                    }
+                }
+                // Avoid zero range
+                const maxValue = maxV > 0 ? maxV : 1;
+                return { priceRange: { minValue: 0, maxValue } };
+            };
+
             // Expose chart/time bounds for range buttons
             currentChart = chart;
             currentFirst = candles[0]?.time ?? null;
@@ -257,6 +344,7 @@
             // Resize handling
             function resizeChart() {
                 chart.applyOptions({ width: chartRoot.clientWidth, height: chartRoot.clientHeight });
+                applyVolumeHeightPx();
             }
             window.addEventListener('resize', resizeChart);
             if ('ResizeObserver' in window) {
@@ -326,6 +414,10 @@
             window.addEventListener('resize', scheduleShading);
             // First render
             setTimeout(scheduleShading, 50);
+            // Re-apply volume height and autoscale when time range changes
+            chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+                applyVolumeHeightPx();
+            });
 
             // Wire bottom range controls
             const b1 = document.getElementById('rng1d');
@@ -471,6 +563,7 @@
             document.getElementById('btn1m').addEventListener('click', () => loadTimeframe('1Min'));
             document.getElementById('btn5m').addEventListener('click', () => loadTimeframe('5Min'));
             document.getElementById('btn30m').addEventListener('click', () => loadTimeframe('30Min'));
+            initRating();
 
             // Optional: read timeframe from URL query (?tf=5Min)
             const params = new URLSearchParams(window.location.search);

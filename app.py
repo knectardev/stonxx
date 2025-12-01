@@ -3,7 +3,7 @@ import requests
 import yaml
 from typing import List, Dict
 import time
-from database import get_bars, get_latest_bar, get_data_range, get_symbols_with_data, get_connection, init_database, get_ingest_overview, has_running_ingest
+from database import get_bars, get_latest_bar, get_data_range, get_symbols_with_data, get_connection, init_database, get_ingest_overview, has_running_ingest, get_symbol_rating, set_symbol_rating
 from datetime import datetime, timedelta
 import subprocess
 import sys
@@ -319,6 +319,10 @@ def get_stocks():
         """)
         counts_30m = {row[0]: row[1] for row in cur.fetchall()}
 
+        # Ratings for symbols (single query)
+        cur.execute("SELECT symbol, rating FROM symbol_ratings")
+        ratings = {row[0]: int(row[1]) for row in cur.fetchall()}
+
         # Latest prices
         for symbol in db_symbols:
             latest_bar = get_latest_bar(symbol, '1Min')
@@ -332,7 +336,8 @@ def get_stocks():
                 'range_end_ts': int(max_ts) if max_ts is not None else None,
                 'bar_count': int(count) if count is not None else 0,
                 'bar_count_5m': int(counts_5m.get(symbol, 0)),
-                'bar_count_30m': int(counts_30m.get(symbol, 0))
+                'bar_count_30m': int(counts_30m.get(symbol, 0)),
+                'rating': int(ratings.get(symbol, 0))
             })
         conn.close()
         
@@ -428,6 +433,29 @@ def symbol_detail(symbol):
         import traceback
         traceback.print_exc()
         return f"Error loading symbol page: {str(e)}", 500
+
+# --- Ratings API ---
+@app.route('/api/rating/<symbol>', methods=['GET'])
+def api_get_rating(symbol):
+    try:
+        rating = get_symbol_rating(symbol.upper())
+        return jsonify({'symbol': symbol.upper(), 'rating': int(rating)})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/rating/<symbol>', methods=['POST'])
+def api_set_rating(symbol):
+    try:
+        data = request.json or {}
+        rating = int(data.get('rating', 0))
+        new_rating = set_symbol_rating(symbol.upper(), rating)
+        return jsonify({'status': 'ok', 'symbol': symbol.upper(), 'rating': int(new_rating)})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     try:
