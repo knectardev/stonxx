@@ -48,22 +48,86 @@
         .price-cell { color: #4ecdc4; font-weight: 500; }
         tbody tr:hover { background-color: #252525; }
         .summary { color: #b0b0b0; font-size: 12px; }
+        /* Timeframe toggle */
+        .tf-toggle {
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .tf-toggle button {
+            padding: 6px 10px;
+            font-size: 12px;
+            color: #d0d0d0;
+            background: #141414;
+            border: 1px solid #2a2a2a;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .tf-toggle button.active {
+            background: #243447;
+            border-color: #426e9e;
+            color: #9ed0ff;
+        }
+        /* Bottom overlay range controls */
+        .range-controls {
+            position: absolute;
+            left: 20px;
+            bottom: 10px;
+            background: rgba(0,0,0,0.4);
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 6px;
+            z-index: 1000;
+        }
         /* Chart styles */
         .chart-container {
             width: 100%;
             height: 520px;
-            padding: 16px 20px;
+            /* add extra bottom padding so controls don't cover time labels */
+            padding: 16px 20px 60px 20px;
+            position: relative;
         }
         .chart-inner {
             width: 100%;
             height: 100%;
+        }
+        .hover-info {
+            position: absolute;
+            top: 20px;
+            left: 24px;
+            background: rgba(0,0,0,0.6);
+            border: 1px solid #2a2a2a;
+            border-radius: 4px;
+            padding: 6px 8px;
+            font-size: 12px;
+            color: #e0e0e0;
+            pointer-events: none;
+            display: none;
+            white-space: nowrap;
+            z-index: 1000;
+        }
+        /* Session shading */
+        .session-overlay {
+            position: absolute;
+            left: 20px;
+            right: 20px;
+            top: 16px;
+            bottom: 60px; /* match container padding bottom */
+            pointer-events: none;
+            z-index: 200;
+        }
+        .session-shade {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.18); /* higher contrast for visibility at all scales */
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>{{ symbol }} • Historical Price Data (1-Minute Bars)</h1>
+            <h1 id="pageTitle">{{ symbol }} • Historical Price Data (1-Minute Bars)</h1>
             <a class="back-link" href="/">← Back to list</a>
         </div>
         <div id="info" class="meta" style="margin-bottom: 10px;"></div>
@@ -71,6 +135,13 @@
         <div class="card">
             <div class="card-header">
                 <div class="summary" id="summaryText">Loading...</div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div class="tf-toggle">
+                        <button id="btn1m" class="active" data-tf="1Min">1 minute</button>
+                        <button id="btn5m" data-tf="5Min">5 minute</button>
+                        <button id="btn30m" data-tf="30Min">30 minute</button>
+                    </div>
+                </div>
             </div>
             <div id="detailBody">
                 <div class="loading">Loading historical data...</div>
@@ -82,6 +153,10 @@
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
         const SYMBOL = "{{ symbol }}";
+        let CURRENT_TF = '1Min';
+        let currentChart = null;
+        let currentFirst = null;
+        let currentLast = null;
 
         function renderPriceChart(data) {
             const container = document.getElementById('detailBody');
@@ -105,8 +180,10 @@
             }
 
             // Build chart container
-            container.innerHTML = '<div class="chart-container"><div id="chartRoot" class="chart-inner"></div></div>';
+            container.innerHTML = '<div class="chart-container"><div id="chartRoot" class="chart-inner"></div><div id="sessionOverlay" class="session-overlay"></div><div id="hoverInfo" class="hover-info"></div><div class="range-controls tf-toggle"><button id="rng1d" data-days="1">1 day</button><button id="rng5d" data-days="5">5 days</button><button id="rng10d" data-days="10">10 days</button><button id="rng1m" data-days="30">1 month</button></div></div>';
             const chartRoot = document.getElementById('chartRoot');
+            const sessionOverlay = document.getElementById('sessionOverlay');
+            const hoverInfo = document.getElementById('hoverInfo');
 
             // Prepare series data
             const candles = [];
@@ -116,6 +193,26 @@
                 candles.push({ time: t, open: bar.open, high: bar.high, low: bar.low, close: bar.close });
                 const up = bar.close >= bar.open;
                 volumes.push({ time: t, value: bar.volume, color: up ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' });
+            }
+
+            // Insert daily whitespace points to ensure weekends/holidays appear on the time scale
+            if (candles.length > 0) {
+                const timeSet = new Set(candles.map(c => c.time));
+                const firstTs = candles[0].time;
+                const lastTs = candles[candles.length - 1].time;
+                const firstMidnight = Math.floor(new Date(new Date(firstTs * 1000).setHours(0,0,0,0)).getTime() / 1000);
+                const lastMidnight = Math.floor(new Date(new Date(lastTs * 1000).setHours(0,0,0,0)).getTime() / 1000);
+                const whites = [];
+                for (let ts = firstMidnight; ts <= lastMidnight; ts += 24 * 60 * 60) {
+                    if (!timeSet.has(ts)) whites.push({ time: ts });
+                }
+                if (whites.length) {
+                    // Merge and sort so timescale includes empty days
+                    candles.push(...whites);
+                    candles.sort((a, b) => a.time - b.time);
+                    volumes.push(...whites);
+                    volumes.sort((a, b) => a.time - b.time);
+                }
             }
 
             // Create chart
@@ -152,6 +249,11 @@
             });
             volumeSeries.setData(volumes);
 
+            // Expose chart/time bounds for range buttons
+            currentChart = chart;
+            currentFirst = candles[0]?.time ?? null;
+            currentLast = candles[candles.length - 1]?.time ?? null;
+
             // Resize handling
             function resizeChart() {
                 chart.applyOptions({ width: chartRoot.clientWidth, height: chartRoot.clientHeight });
@@ -162,7 +264,112 @@
                 ro.observe(chartRoot);
             }
 
+            // Shade non-primary trading hours (outside 9:30-16:00 local)
+            function updateShading() {
+                if (!currentChart) return;
+                sessionOverlay.innerHTML = '';
+                const width = chartRoot.clientWidth;
+                if (width <= 0) return;
+                const leftTime = currentChart.timeScale().coordinateToTime(0);
+                const rightTime = currentChart.timeScale().coordinateToTime(width);
+                const left = Number(leftTime);
+                const right = Number(rightTime);
+                if (!isFinite(left) || !isFinite(right)) return;
+
+                // Start from midnight of left day, iterate by day
+                const startDate = new Date(left * 1000);
+                startDate.setHours(0,0,0,0);
+                let cursor = Math.floor(startDate.getTime() / 1000);
+                const endLimit = right + 86400; // slightly beyond
+
+                while (cursor < endLimit) {
+                    const dayStart = cursor;
+                    const preStart = dayStart;
+                    const preEnd = dayStart + (9 * 3600) + (30 * 60); // 09:30
+                    const postStart = dayStart + (16 * 3600); // 16:00
+                    const postEnd = dayStart + 24 * 3600; // 24:00
+
+                    // helper to draw a rect for [a,b]
+                    function drawSeg(a, b) {
+                        const x1 = currentChart.timeScale().timeToCoordinate(a);
+                        const x2 = currentChart.timeScale().timeToCoordinate(b);
+                        if (x1 == null || x2 == null) return;
+                        const leftPx = Math.max(0, Math.min(width, x1));
+                        const rightPx = Math.max(0, Math.min(width, x2));
+                        const w = Math.max(1, rightPx - leftPx); // ensure at least 1px wide so it's always visible
+                        const div = document.createElement('div');
+                        div.className = 'session-shade';
+                        div.style.left = leftPx + 'px';
+                        div.style.width = w + 'px';
+                        sessionOverlay.appendChild(div);
+                    }
+
+                    drawSeg(preStart, preEnd);
+                    drawSeg(postStart, postEnd);
+
+                    cursor += 24 * 3600; // next day
+                }
+            }
+
+            currentChart = chart;
+            // Recompute shading on visible range/zoom/pan and resize, defer to next frame for stable coordinates
+            let shadeRaf = null;
+            function scheduleShading() {
+                if (shadeRaf) cancelAnimationFrame(shadeRaf);
+                shadeRaf = requestAnimationFrame(() => {
+                    shadeRaf = null;
+                    updateShading();
+                });
+            }
+            chart.timeScale().subscribeVisibleTimeRangeChange(() => scheduleShading());
+            chart.timeScale().subscribeVisibleLogicalRangeChange(() => scheduleShading());
+            window.addEventListener('resize', scheduleShading);
+            // First render
+            setTimeout(scheduleShading, 50);
+
+            // Wire bottom range controls
+            const b1 = document.getElementById('rng1d');
+            const b5 = document.getElementById('rng5d');
+            const b10 = document.getElementById('rng10d');
+            const b30 = document.getElementById('rng1m');
+            if (b1) b1.addEventListener('click', () => setVisibleDays(1));
+            if (b5) b5.addEventListener('click', () => setVisibleDays(5));
+            if (b10) b10.addEventListener('click', () => setVisibleDays(10));
+            if (b30) b30.addEventListener('click', () => setVisibleDays(30));
+
+            function formatVolume(v) {
+                if (v == null) return '—';
+                const n = Number(v);
+                if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+                if (n >= 1_000) return (n / 1_000).toFixed(2) + 'K';
+                return n.toLocaleString();
+            }
+
+            // Crosshair hover info
+            chart.subscribeCrosshairMove(param => {
+                // Show only when cursor is inside the chart pane
+                if (!param || !param.point || param.point.x < 0 || param.point.y < 0) {
+                    hoverInfo.style.display = 'none';
+                    return;
+                }
+                const candlePoint = param.seriesData.get(candleSeries);
+                const volPoint = param.seriesData.get(volumeSeries);
+                if (!candlePoint) {
+                    hoverInfo.style.display = 'none';
+                    return;
+                }
+                const unix = Number(param.time);
+                const dt = isFinite(unix) ? new Date(unix * 1000) : new Date();
+                const price = (candlePoint.close ?? candlePoint.value ?? candlePoint.price);
+                const vol = volPoint ? volPoint.value : undefined;
+                const tf = (CURRENT_TF === '5Min' ? '5m' : '1m');
+                hoverInfo.textContent = `${dt.toLocaleString()} • ${price?.toFixed ? price.toFixed(2) : price} • Vol ${formatVolume(vol)} • ${tf}`;
+                hoverInfo.style.display = 'block';
+            });
+
             chart.timeScale().fitContent();
+            // Ensure shading after fitContent applies
+            setTimeout(scheduleShading, 100);
         }
 
         function showError(message) {
@@ -170,17 +377,106 @@
             container.innerHTML = `<div class="error">Error: ${message}</div>`;
         }
 
-        window.addEventListener('DOMContentLoaded', () => {
-            fetch(`/api/bars/${encodeURIComponent(SYMBOL)}?timeframe=1Min`)
+        function tfLabel(tf) {
+            if (tf === '5Min') return '5-Minute Bars';
+            if (tf === '30Min') return '30-Minute Bars';
+            return '1-Minute Bars';
+        }
+
+        function setActiveButton(tf) {
+            document.getElementById('btn1m').classList.toggle('active', tf === '1Min');
+            document.getElementById('btn5m').classList.toggle('active', tf === '5Min');
+            const b30 = document.getElementById('btn30m');
+            if (b30) b30.classList.toggle('active', tf === '30Min');
+        }
+
+        function clearActiveRangeButtons() {
+            ['rng1d','rng5d','rng10d','rng1m'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.remove('active');
+            });
+        }
+
+        function setActiveRangeButtonByDays(days) {
+            clearActiveRangeButtons();
+            const map = {1:'rng1d',5:'rng5d',10:'rng10d',30:'rng1m'};
+            const id = map[days];
+            if (id) {
+                const el = document.getElementById(id);
+                if (el) el.classList.add('active');
+            }
+        }
+
+        function setVisibleDays(days) {
+            if (!currentChart || !currentFirst || !currentLast) return;
+            const seconds = days * 24 * 60 * 60;
+            const from = Math.max(currentFirst, currentLast - seconds);
+            currentChart.timeScale().setVisibleRange({ from, to: currentLast });
+            setActiveRangeButtonByDays(days);
+        }
+
+        function loadTimeframe(tf) {
+            CURRENT_TF = tf;
+            setActiveButton(tf);
+            clearActiveRangeButtons();
+            document.getElementById('pageTitle').textContent = `${SYMBOL} • Historical Price Data (${tfLabel(tf)})`;
+            document.getElementById('detailBody').innerHTML = '<div class="loading">Loading historical data...</div>';
+            const fetchTf = (tf === '30Min') ? '5Min' : tf; // fetch 5m and aggregate to 30m
+            fetch(`/api/bars/${encodeURIComponent(SYMBOL)}?timeframe=${encodeURIComponent(fetchTf)}`)
                 .then(r => r.json())
                 .then(data => {
                     if (data.error) {
                         showError(data.error);
                         return;
                     }
-                    renderPriceChart(data);
+                    if (tf === '30Min') {
+                        // Aggregate 5m bars into 30m bars
+                        const buckets = new Map();
+                        const order = [];
+                        for (const b of (data.bars || [])) {
+                            const ts = Math.floor(new Date(b.datetime).getTime() / 1000);
+                            const bucket = Math.floor(ts / 1800) * 1800;
+                            let agg = buckets.get(bucket);
+                            if (!agg) {
+                                agg = { open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume, timestamp: bucket };
+                                buckets.set(bucket, agg);
+                                order.push(bucket);
+                            } else {
+                                agg.high = Math.max(agg.high, b.high);
+                                agg.low = Math.min(agg.low, b.low);
+                                agg.close = b.close;
+                                agg.volume += b.volume;
+                            }
+                        }
+                        order.sort((a,b)=>a-b);
+                        const bars = order.map(ts => {
+                            const a = buckets.get(ts);
+                            return {
+                                timestamp: a.timestamp,
+                                datetime: new Date(a.timestamp * 1000).toISOString(),
+                                open: a.open, high: a.high, low: a.low, close: a.close, volume: a.volume
+                            };
+                        });
+                        const out = { symbol: data.symbol, timeframe: '30Min', bars, count: bars.length, date_range: data.date_range };
+                        renderPriceChart(out);
+                    } else {
+                        renderPriceChart(data);
+                    }
                 })
                 .catch(err => showError(err.message));
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            // Hook up toggle buttons
+            document.getElementById('btn1m').addEventListener('click', () => loadTimeframe('1Min'));
+            document.getElementById('btn5m').addEventListener('click', () => loadTimeframe('5Min'));
+            document.getElementById('btn30m').addEventListener('click', () => loadTimeframe('30Min'));
+
+            // Optional: read timeframe from URL query (?tf=5Min)
+            const params = new URLSearchParams(window.location.search);
+            const tf = params.get('tf');
+            const initial = tf === '5Min' ? '5Min' : '1Min';
+            loadTimeframe(initial);
         });
     </script>
 </body>

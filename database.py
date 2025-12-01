@@ -52,6 +52,26 @@ def init_database():
         CREATE INDEX IF NOT EXISTS idx_bars_symbol 
         ON bars(symbol)
     ''')
+
+    # Ingest runs table - tracks background/on-demand ingest processes
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ingest_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timeframe TEXT NOT NULL,
+            mode TEXT NOT NULL,                  -- e.g., 'catchup', 'backfill_8w'
+            status TEXT NOT NULL,                -- 'running', 'finished', 'error'
+            started_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            ended_at INTEGER,
+            window_start INTEGER,                -- unix seconds
+            window_end INTEGER,                  -- unix seconds
+            inserted_rows INTEGER NOT NULL DEFAULT 0,
+            pid INTEGER
+        )
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_ingest_runs_timeframe_status
+        ON ingest_runs(timeframe, status, started_at)
+    ''')
     
     conn.commit()
     conn.close()
@@ -230,6 +250,111 @@ def delete_old_bars(days_to_keep: int = 90):
     conn.close()
     
     return deleted
+
+def create_ingest_run(timeframe: str, mode: str, window_start: int, window_end: int, pid: int) -> int:
+    """Create an ingest run record and return its ID"""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        INSERT INTO ingest_runs(timeframe, mode, status, started_at, window_start, window_end, pid)
+        VALUES (?, ?, 'running', strftime('%s','now'), ?, ?, ?)
+    ''', (timeframe, mode, window_start, window_end, pid))
+    conn.commit()
+    run_id = cur.lastrowid
+    conn.close()
+    return run_id
+
+def update_ingest_run(run_id: int, status: Optional[str] = None, inserted_rows_increment: Optional[int] = None, ended_at_now: bool = False):
+    """Update status and/or increment inserted_rows for an ingest run"""
+    conn = get_connection()
+    cur = conn.cursor()
+    if inserted_rows_increment:
+        cur.execute('UPDATE ingest_runs SET inserted_rows = inserted_rows + ? WHERE id = ?', (inserted_rows_increment, run_id))
+    if status is not None:
+        if ended_at_now and status in ('finished', 'error'):
+            cur.execute('UPDATE ingest_runs SET status = ?, ended_at = strftime(\'%s\',\'now\') WHERE id = ?', (status, run_id))
+        else:
+            cur.execute('UPDATE ingest_runs SET status = ? WHERE id = ?', (status, run_id))
+    conn.commit()
+    conn.close()
+
+def get_timeframe_freshness(timeframe: str) -> Optional[int]:
+    """
+    Return the earliest 'latest timestamp' across all symbols for a timeframe.
+    Interpreted as how far behind the system could be at worst.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        WITH latest AS (
+            SELECT symbol, MAX(timestamp) AS max_ts
+            FROM bars
+            WHERE timeframe = ?
+            GROUP BY symbol
+        )
+        SELECT MIN(max_ts) FROM latest
+    ''', (timeframe,))
+    row = cur.fetchone()
+    conn.close()
+    if row and row[0]:
+        return int(row[0])
+    return None
+
+def get_ingest_overview() -> Dict:
+    """Return running and last-finished run info plus freshness by timeframe."""
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # Running
+    cur.execute('''
+        SELECT id, timeframe, mode, status, started_at, window_start, window_end, inserted_rows, pid
+        FROM ingest_runs
+        WHERE status = 'running'
+        ORDER BY started_at DESC
+    ''')
+    running = [dict(row) for row in cur.fetchall()]
+
+    # Last finished per timeframe
+    last_finished: Dict[str, Dict] = {}
+    for tf in ('1Min', '5Min', '30Min'):
+        cur.execute('''
+            SELECT id, timeframe, mode, status, started_at, ended_at, window_start, window_end, inserted_rows, pid
+            FROM ingest_runs
+            WHERE timeframe = ? AND status = 'finished'
+            ORDER BY ended_at DESC
+            LIMIT 1
+        ''', (tf,))
+        row = cur.fetchone()
+        last_finished[tf] = dict(row) if row else None
+
+    conn.close()
+
+    return {
+        'running': running,
+        'last_finished': last_finished,
+        'freshness': {
+            '1Min': get_timeframe_freshness('1Min'),
+            '5Min': get_timeframe_freshness('5Min'),
+            '30Min': get_timeframe_freshness('30Min'),
+        }
+    }
+
+def has_running_ingest(timeframe: Optional[str] = None, mode: Optional[str] = None) -> bool:
+    """Return True if there is a running ingest, optionally filtered by timeframe and mode."""
+    conn = get_connection()
+    cur = conn.cursor()
+    query = "SELECT COUNT(*) FROM ingest_runs WHERE status = 'running'"
+    params: List = []
+    if timeframe:
+        query += " AND timeframe = ?"
+        params.append(timeframe)
+    if mode:
+        query += " AND mode = ?"
+        params.append(mode)
+    cur.execute(query, params)
+    cnt = cur.fetchone()[0]
+    conn.close()
+    return cnt > 0
 
 if __name__ == '__main__':
     # Initialize database when run directly

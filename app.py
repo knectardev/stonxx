@@ -3,8 +3,13 @@ import requests
 import yaml
 from typing import List, Dict
 import time
-from database import get_bars, get_latest_bar, get_data_range, get_symbols_with_data, get_connection
+from database import get_bars, get_latest_bar, get_data_range, get_symbols_with_data, get_connection, init_database, get_ingest_overview, has_running_ingest
 from datetime import datetime, timedelta
+import subprocess
+import sys
+import os
+import threading
+import time as time_mod
 
 app = Flask(__name__)
 
@@ -105,6 +110,7 @@ def get_stock_prices(symbols: List[str]) -> Dict[str, float]:
 @app.route('/')
 def index():
     try:
+        _ensure_startup()
         return render_template('index.html')
     except Exception as e:
         import traceback
@@ -113,8 +119,163 @@ def index():
 
 @app.route('/health')
 def health():
+    _ensure_startup()
     return jsonify({'status': 'ok'})
 
+def _spawn_ingest(mode: str, tfs=None):
+    """Internal helper to start an ingest subprocess detached."""
+    python_exe = sys.executable or 'python'
+    if mode == 'catchup':
+        tfs = tfs or ['1m','5m','30m']
+        tfs_arg = ','.join(tfs)
+        cmd = [python_exe, '-u', 'ingest_catchup.py', '--tfs', tfs_arg]
+    elif mode == 'backfill_30m_8w':
+        cmd = [python_exe, '-u', 'fetch_30min_last8weeks.py']
+    else:
+        raise ValueError(f'Unsupported mode: {mode}')
+
+    creationflags = 0
+    if os.name == 'nt':
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, creationflags=creationflags)
+
+@app.route('/api/ingest/start', methods=['POST'])
+def start_ingest():
+    """
+    Trigger on-demand ingestion jobs.
+    Body JSON:
+      { "mode": "catchup", "tfs": ["1m","5m","30m"] }
+      or
+      { "mode": "backfill_30m_8w" }
+    """
+    try:
+        init_database()
+        data = request.json or {}
+        mode = (data.get('mode') or 'catchup').lower()
+
+        if mode not in ('catchup', 'backfill_30m_8w'):
+            return jsonify({'error': f'Unsupported mode: {mode}'}), 400
+
+        if mode == 'catchup':
+            tfs = data.get('tfs') or ['1m','5m','30m']
+            # prevent duplicate spawn if already running same TFs
+            # (best-effort guard; catch-up script itself is idempotent)
+            if any(has_running_ingest(tf_map, 'catchup') for tf_map in ['1Min' if tf.lower().startswith('1') else '5Min' if tf.lower().startswith('5') else '30Min' for tf in tfs]):
+                pass  # allow user to queue another if needed
+            _spawn_ingest('catchup', tfs=tfs)
+        else:  # backfill
+            _spawn_ingest('backfill_30m_8w')
+
+        return jsonify({'status': 'started', 'mode': mode}), 202
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# --- Realtime 1m ingestor thread ---
+_rt_stop = threading.Event()
+_rt_thread = None
+
+def _realtime_loop():
+    # Every minute, attempt a 1m catch-up run (small overlap handled by script).
+    while not _rt_stop.is_set():
+        try:
+            # avoid spawning if a 1m catchup already running
+            if not has_running_ingest('1Min', 'catchup'):
+                _spawn_ingest('catchup', tfs=['1m'])
+        except Exception as e:
+            # log then continue
+            print(f"Realtime loop error: {e}")
+        # sleep until next minute boundary with a small buffer
+        now = time_mod.time()
+        sleep_s = max(30.0, 60.0 - (now % 60.0))  # at least 30s, align roughly per minute
+        _rt_stop.wait(sleep_s)
+
+def start_realtime_ingest():
+    global _rt_thread
+    if _rt_thread and _rt_thread.is_alive():
+        return
+    _rt_stop.clear()
+    _rt_thread = threading.Thread(target=_realtime_loop, name='realtime_1m_ingest', daemon=True)
+    _rt_thread.start()
+
+def stop_realtime_ingest():
+    _rt_stop.set()
+
+@app.route('/api/ingest/realtime', methods=['POST'])
+def toggle_realtime():
+    """Start or stop realtime 1m loop: {action:'start'|'stop'}"""
+    try:
+        data = request.json or {}
+        action = (data.get('action') or '').lower()
+        if action == 'start':
+            start_realtime_ingest()
+        elif action == 'stop':
+            stop_realtime_ingest()
+        else:
+            return jsonify({'error': 'action must be start or stop'}), 400
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ingest/status', methods=['GET'])
+def ingest_status():
+    """Return current run status and freshness by timeframe."""
+    try:
+        _ensure_startup()
+        init_database()
+        overview = get_ingest_overview()
+
+        # Convert timestamps to ISO where present
+        def ts_to_iso(ts):
+            return datetime.fromtimestamp(ts).isoformat() if ts else None
+
+        for r in overview['running']:
+            for k in ('started_at','window_start','window_end'):
+                if r.get(k):
+                    r[k] = ts_to_iso(int(r[k]))
+        last_finished = {}
+        for tf, row in overview['last_finished'].items():
+            if row:
+                row = dict(row)
+                if row.get('started_at'):
+                    row['started_at'] = ts_to_iso(int(row['started_at']))
+                if row.get('ended_at'):
+                    row['ended_at'] = ts_to_iso(int(row['ended_at']))
+                if row.get('window_start'):
+                    row['window_start'] = ts_to_iso(int(row['window_start']))
+                if row.get('window_end'):
+                    row['window_end'] = ts_to_iso(int(row['window_end']))
+            last_finished[tf] = row
+        freshness_iso = {tf: ts_to_iso(ts) if ts else None for tf, ts in overview['freshness'].items()}
+
+        return jsonify({
+            'running': overview['running'],
+            'last_finished': last_finished,
+            'freshness': freshness_iso,
+            'realtime_running': bool(_rt_thread and _rt_thread.is_alive())
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# --- Startup (Flask 3 compatible) ---
+_startup_done = False
+def _ensure_startup():
+    global _startup_done
+    if _startup_done:
+        return
+    try:
+        if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
+            init_database()
+            _spawn_ingest('catchup', tfs=['1m','5m','30m'])
+            start_realtime_ingest()
+        _startup_done = True
+    except Exception as e:
+        print(f"Startup ingest error: {e}")
 @app.route('/api/stocks', methods=['GET'])
 def get_stocks():
     """Get stocks from database only (symbols with historical data)"""
@@ -129,7 +290,7 @@ def get_stocks():
         # Fetch latest prices and min/max timestamps per symbol efficiently
         stocks = []
 
-        # Single query to get min/max and count per symbol
+        # Single query to get min/max and 1m count per symbol
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -139,6 +300,24 @@ def get_stocks():
             GROUP BY symbol
         """)
         ranges = {row[0]: (row[1], row[2], row[3]) for row in cur.fetchall()}
+
+        # Query to get 5m counts per symbol
+        cur.execute("""
+            SELECT symbol, COUNT(*) AS bar_count_5m
+            FROM bars
+            WHERE timeframe = '5Min'
+            GROUP BY symbol
+        """)
+        counts_5m = {row[0]: row[1] for row in cur.fetchall()}
+
+        # Query to get 30m counts per symbol
+        cur.execute("""
+            SELECT symbol, COUNT(*) AS bar_count_30m
+            FROM bars
+            WHERE timeframe = '30Min'
+            GROUP BY symbol
+        """)
+        counts_30m = {row[0]: row[1] for row in cur.fetchall()}
 
         # Latest prices
         for symbol in db_symbols:
@@ -151,7 +330,9 @@ def get_stocks():
                 'price': latest_bar['close'],
                 'range_start_ts': int(min_ts) if min_ts is not None else None,
                 'range_end_ts': int(max_ts) if max_ts is not None else None,
-                'bar_count': int(count) if count is not None else 0
+                'bar_count': int(count) if count is not None else 0,
+                'bar_count_5m': int(counts_5m.get(symbol, 0)),
+                'bar_count_30m': int(counts_30m.get(symbol, 0))
             })
         conn.close()
         

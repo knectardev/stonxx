@@ -301,3 +301,17 @@ The following tools are helpful but not required:
 - SQLite Documentation: https://www.sqlite.org/docs.html
 - Python Documentation: https://docs.python.org/3/
 
+Sounds good. When you move to your main workstation, here’s a minimal setup checklist:
+Install Python 3.10+; clone/copy the repo.
+Create venv and install deps:
+Windows PowerShell:
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Add config.yml with your Alpaca keys and URLs (same format as here).
+Optionally copy stonxx.db from this machine, or let it rebuild.
+Run the app: python app.py (realtime 1m and auto-catchup will start on load).
+When you’re ready for Windows Task Scheduler, we’ll:
+Create a task to launch the app at ~3:55 AM ET daily (so it captures pre‑market).
+Optionally add a separate task to run python -u ingest_catchup.py --tfs 1m,5m,30m on boot or at specific times as a safety net.
+Set “Run whether user is logged on or not” and “Start in” to the project directory; point to your venv’s python.

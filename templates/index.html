@@ -384,6 +384,25 @@
     <div class="container">
         <h1>Stock Filter</h1>
 
+        <div class="filter-section" style="margin-bottom:20px;">
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                <span class="filter-label" style="min-width:110px;">Ingestion</span>
+                <button id="btnCatch1m" class="btn">Catch up 1m</button>
+                <button id="btnCatch5m" class="btn">Catch up 5m</button>
+                <button id="btnCatch30m" class="btn">Catch up 30m</button>
+                <button id="btnCatchAll" class="btn">Catch up All</button>
+                <button id="btnBackfill30m" class="btn btn-secondary">Backfill 30m (8w)</button>
+                <span id="ingestMessage" style="color:#b0b0b0; font-size:12px;"></span>
+            </div>
+            <div id="ingestStatus" style="margin-top:12px; display:flex; gap:20px; flex-wrap:wrap;">
+                <div class="status-chip"><span>1m freshness:</span> <b id="fresh1m">—</b></div>
+                <div class="status-chip"><span>5m freshness:</span> <b id="fresh5m">—</b></div>
+                <div class="status-chip"><span>30m freshness:</span> <b id="fresh30m">—</b></div>
+                <div class="status-chip"><span>Running jobs:</span> <b id="runningCount">0</b></div>
+                <div class="status-chip"><span>Realtime 1m:</span> <b id="rtState">—</b></div>
+            </div>
+        </div>
+
         <div class="filter-section">
             <div class="filter-header">
                 <span class="filter-label">Last Price</span>
@@ -424,12 +443,14 @@
                         <th class="sortable" data-column="symbol">Symbol</th>
                         <th class="sortable" data-column="price">Price</th>
                         <th class="sortable" data-column="bar_count">1m Records</th>
+                        <th class="sortable" data-column="bar_count_5m">5m Records</th>
+                        <th class="sortable" data-column="bar_count_30m">30m Records</th>
                         <th>Data Range</th>
                     </tr>
                 </thead>
                 <tbody id="stockTableBody">
                     <tr>
-                        <td colspan="4" class="loading">Loading stocks...</td>
+                        <td colspan="6" class="loading">Loading stocks...</td>
                     </tr>
                 </tbody>
             </table>
@@ -457,18 +478,20 @@
         let sortState = { column: 'price', direction: 'asc' }; // 'asc' or 'desc'
         let globalRange = { start: null, end: null }; // unix seconds across all rows
         let searchQuery = '';
+        let statusTimer = null;
 
         // Initialize
         async function init() {
             await loadStocks();
             setupEventListeners();
             updateFilter();
+            startStatusPolling();
         }
 
         async function loadStocks() {
             try {
                 const tbody = document.getElementById('stockTableBody');
-                tbody.innerHTML = '<tr><td colspan="4" class="loading">Loading stocks from Alpaca API...</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading stocks from Alpaca API...</td></tr>';
                 
                 const response = await fetch('/api/stocks');
                 if (!response.ok) {
@@ -477,13 +500,13 @@
                 const data = await response.json();
                 if (data.error) {
                     showError(data.error);
-                    tbody.innerHTML = '<tr><td colspan="4" class="loading">Error: ' + data.error + '</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="loading">Error: ' + data.error + '</td></tr>';
                     return;
                 }
                 allStocks = data.stocks || [];
                 if (allStocks.length === 0) {
                     showError('No stocks found. Please check your Alpaca API credentials and network connection.');
-                    tbody.innerHTML = '<tr><td colspan="4" class="loading">No stocks found. Check console for details.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="loading">No stocks found. Check console for details.</td></tr>';
                     return;
                 }
                 
@@ -521,7 +544,7 @@
                 console.error('Error loading stocks:', error);
                 showError('Failed to load stocks: ' + error.message);
                 const tbody = document.getElementById('stockTableBody');
-                tbody.innerHTML = '<tr><td colspan="2" class="loading">Error: ' + error.message + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" class="loading">Error: ' + error.message + '</td></tr>';
             }
         }
 
@@ -577,6 +600,13 @@
                 document.getElementById('maxPrice').value = maxPrice;
                 updateFilter();
             });
+
+            // Ingestion buttons
+            document.getElementById('btnCatch1m').addEventListener('click', () => startIngest({mode:'catchup', tfs:['1m']}));
+            document.getElementById('btnCatch5m').addEventListener('click', () => startIngest({mode:'catchup', tfs:['5m']}));
+            document.getElementById('btnCatch30m').addEventListener('click', () => startIngest({mode:'catchup', tfs:['30m']}));
+            document.getElementById('btnCatchAll').addEventListener('click', () => startIngest({mode:'catchup', tfs:['1m','5m','30m']}));
+            document.getElementById('btnBackfill30m').addEventListener('click', () => startIngest({mode:'backfill_30m_8w'}));
         }
 
         // no datalist suggestions; we purely filter table by text
@@ -699,6 +729,10 @@
                     comparison = a.price - b.price;
                 } else if (sortState.column === 'bar_count') {
                     comparison = (a.bar_count || 0) - (b.bar_count || 0);
+                } else if (sortState.column === 'bar_count_5m') {
+                    comparison = (a.bar_count_5m || 0) - (b.bar_count_5m || 0);
+                } else if (sortState.column === 'bar_count_30m') {
+                    comparison = (a.bar_count_30m || 0) - (b.bar_count_30m || 0);
                 }
                 return sortState.direction === 'asc' ? comparison : -comparison;
             });
@@ -710,7 +744,7 @@
             tbody.innerHTML = '';
 
             if (filtered.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" class="loading">No stocks found in this price range</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="loading">No stocks found in this price range</td></tr>';
                 return;
             }
 
@@ -732,6 +766,8 @@
                     <td><a href="/symbol/${stock.symbol}" class="symbol-link">${stock.symbol}</a></td>
                     <td class="price-cell">${stock.price.toFixed(3)}</td>
                     <td>${(stock.bar_count || 0).toLocaleString()}</td>
+                    <td>${(stock.bar_count_5m || 0).toLocaleString()}</td>
+                    <td>${(stock.bar_count_30m || 0).toLocaleString()}</td>
                     <td>${rangeCell}</td>
                 `;
                 tbody.appendChild(row);
@@ -747,6 +783,81 @@
             const errorDiv = document.getElementById('errorMessage');
             errorDiv.textContent = message;
             errorDiv.style.display = 'block';
+        }
+
+        // Ingestion control
+        async function startIngest(payload) {
+            try {
+                setIngestButtonsDisabled(true);
+                setIngestMessage('Starting...', '#b0b0b0');
+                const res = await fetch('/api/ingest/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) throw new Error('Failed to start ingest');
+                setIngestMessage('Ingest started. Monitoring status...', '#4a9eff');
+                // force a status refresh immediately
+                await refreshStatus();
+            } catch (e) {
+                setIngestMessage('Error: ' + (e.message || e), '#ff6b6b');
+            } finally {
+                // buttons may remain disabled if jobs running; refreshStatus will re-enable when idle
+                await refreshStatus();
+            }
+        }
+
+        function setIngestButtonsDisabled(disabled) {
+            ['btnCatch1m','btnCatch5m','btnCatch30m','btnCatchAll','btnBackfill30m'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = disabled;
+            });
+        }
+
+        function setIngestMessage(text, color) {
+            const el = document.getElementById('ingestMessage');
+            el.textContent = text || '';
+            if (color) el.style.color = color;
+        }
+
+        function startStatusPolling() {
+            if (statusTimer) clearInterval(statusTimer);
+            statusTimer = setInterval(refreshStatus, 5000);
+            refreshStatus();
+        }
+
+        async function refreshStatus() {
+            try {
+                const res = await fetch('/api/ingest/status');
+                if (!res.ok) throw new Error('Status fetch failed');
+                const js = await res.json();
+                updateStatusUI(js);
+            } catch (e) {
+                // non-fatal; show minimal message
+                setIngestMessage('Status error: ' + (e.message || e), '#ff6b6b');
+            }
+        }
+
+        function updateStatusUI(status) {
+            const f1 = document.getElementById('fresh1m');
+            const f5 = document.getElementById('fresh5m');
+            const f30 = document.getElementById('fresh30m');
+            f1.textContent = status.freshness?.['1Min'] ? new Date(status.freshness['1Min']).toLocaleString() : '—';
+            f5.textContent = status.freshness?.['5Min'] ? new Date(status.freshness['5Min']).toLocaleString() : '—';
+            f30.textContent = status.freshness?.['30Min'] ? new Date(status.freshness['30Min']).toLocaleString() : '—';
+
+            const running = Array.isArray(status.running) ? status.running : [];
+            document.getElementById('runningCount').textContent = running.length;
+            document.getElementById('rtState').textContent = status.realtime_running ? 'ON' : 'OFF';
+
+            // enable buttons only when nothing is running
+            setIngestButtonsDisabled(running.length > 0);
+            if (running.length > 0) {
+                const modes = running.map(r => `${r.mode}:${r.timeframe}`).join(', ');
+                setIngestMessage('Running: ' + modes, '#b0b0b0');
+            } else {
+                setIngestMessage('', '#b0b0b0');
+            }
         }
 
         // Modal functions
@@ -859,6 +970,26 @@
             position: relative;
             height: 10px;
             width: 160px;
+        }
+        .btn {
+            background-color: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            color: #e0e0e0;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn:hover { border-color: #4a9eff; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-secondary { background-color: #223; }
+        .status-chip {
+            background: #121212;
+            border: 1px solid #2a2a2a;
+            color: #b0b0b0;
+            font-size: 12px;
+            padding: 6px 10px;
+            border-radius: 6px;
         }
         .mini-track {
             position: absolute;
