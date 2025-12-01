@@ -414,6 +414,16 @@
                 <div class="search-container">
                     <input id="symbolSearch" class="search-input" type="text" placeholder="Search ticker..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
                 </div>
+                <div class="rating-filter">
+                    <select id="ratingFilter" class="rating-select" title="Minimum rating">
+                        <option value="0">All ratings</option>
+                        <option value="1">1+ star</option>
+                        <option value="2">2+ stars</option>
+                        <option value="3">3+ stars</option>
+                        <option value="4">4+ stars</option>
+                        <option value="5">5 stars</option>
+                    </select>
+                </div>
                 <div class="matches-section">
                     <span class="matches-label">Matches:</span>
                     <span class="matches-count" id="matchCount">0</span>
@@ -442,7 +452,7 @@
                     <tr>
                         <th class="sortable" data-column="symbol">Symbol</th>
                         <th class="sortable" data-column="price">Price</th>
-                        <th>Rating</th>
+                        <th class="sortable" data-column="rating">Rating</th>
                         <th class="sortable" data-column="bar_count">1m Records</th>
                         <th class="sortable" data-column="bar_count_5m">5m Records</th>
                         <th class="sortable" data-column="bar_count_30m">30m Records</th>
@@ -480,6 +490,7 @@
         let globalRange = { start: null, end: null }; // unix seconds across all rows
         let searchQuery = '';
         let statusTimer = null;
+        let minRating = 0; // minimum star rating filter (0 = all)
 
         // Initialize
         async function init() {
@@ -638,6 +649,16 @@
                 });
             });
 
+            // Rating filter dropdown
+            const ratingSelect = document.getElementById('ratingFilter');
+            if (ratingSelect) {
+                ratingSelect.addEventListener('change', (e) => {
+                    const v = parseInt(e.target.value || '0', 10);
+                    minRating = isNaN(v) ? 0 : Math.max(0, Math.min(5, v));
+                    updateFilter();
+                });
+            }
+
             // Slider handles
             setupSliderHandle('minHandle', (value) => {
                 minPrice = Math.round(value);
@@ -766,6 +787,7 @@
             const filtered = allStocks.filter(stock => {
                 const inPrice = stock.price >= minPrice && stock.price <= maxPrice;
                 if (!inPrice) return false;
+                if (minRating > 0 && (Number(stock.rating || 0) < minRating)) return false;
                 if (!searchQuery) return true;
                 return stock.symbol.toLowerCase().includes(searchQuery);
             });
@@ -777,6 +799,8 @@
                     comparison = a.symbol.localeCompare(b.symbol);
                 } else if (sortState.column === 'price') {
                     comparison = a.price - b.price;
+                } else if (sortState.column === 'rating') {
+                    comparison = (Number(a.rating || 0)) - (Number(b.rating || 0));
                 } else if (sortState.column === 'bar_count') {
                     comparison = (a.bar_count || 0) - (b.bar_count || 0);
                 } else if (sortState.column === 'bar_count_5m') {
@@ -1046,6 +1070,15 @@
         .stars { display: inline-flex; gap: 2px; cursor: pointer; user-select: none; }
         .star { color: #555; font-size: 16px; line-height: 1; }
         .star.filled { color: #f5b301; }
+        .rating-filter { display:flex; align-items:center; }
+        .rating-select {
+            background-color: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            color: #e0e0e0;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
         .mini-track {
             position: absolute;
             top: 50%;
