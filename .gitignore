@@ -1,3 +1,10 @@
+# Databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
 # Configuration files with sensitive data
 config.yml
 
